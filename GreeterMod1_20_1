@@ -1,0 +1,125 @@
+package com.example.greetingsmod;
+
+import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.server.ServerStartCallback;
+import net.fabricmc.fabric.api.event.server.ServerStopCallback;
+import net.fabricmc.fabric.api.event.player.PlayerJoinCallback;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.LiteralText;
+import net.minecraft.text.Text;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class GreetingsMod implements ModInitializer {
+    private final String[] greetings = {
+            "Welcome back, %s!",
+            "Hello, %s!",
+            "Hi, %s!",
+            "wb, %s!",
+            "Hey, %s!",
+            "Good morning, %s!",
+            "%s!",
+            "Great seeing you, %s!"
+    };
+
+    private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+    private final Map<ServerPlayerEntity, Integer> playerTasks = new HashMap<>();
+
+    @Override
+    public void onInitialize() {
+        ServerStartCallback.EVENT.register(this::onServerStart);
+        ServerStopCallback.EVENT.register(this::onServerStop);
+        PlayerJoinCallback.EVENT.register(this::onPlayerJoin);
+        ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
+    }
+
+    private void onServerStart(MinecraftServer server) {
+        System.out.println("Greetings Mod has started!");
+    }
+
+    private void onServerStop(MinecraftServer server) {
+        System.out.println("Greetings Mod has stopped!");
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void onPlayerJoin(ServerPlayerEntity player) {
+        String greeting = getRandomGreeting(player.getName().getString());
+        int delay = getRandomDelay();
+        int taskId = executorService.schedule(() -> {
+            if (player.getServer() != null) {
+                Text formattedGreeting = new LiteralText(greeting);
+                player.sendMessage(formattedGreeting, false);
+                scheduleLeaveMessage(player);
+            }
+            playerTasks.remove(player);
+        }, delay, TimeUnit.SECONDS).hashCode();
+
+        playerTasks.put(player, taskId);
+    }
+
+    private void scheduleLeaveMessage(ServerPlayerEntity player) {
+        executorService.schedule(() -> {
+            if (player.getServer() != null && !player.isOnline()) {
+                if (new Random().nextBoolean()) {
+                    player.sendMessage(new LiteralText("..."), false);
+                }
+            }
+        }, 10, TimeUnit.SECONDS);
+    }
+
+    private void onServerTick(MinecraftServer server) {
+        for (ServerPlayerEntity player : playerTasks.keySet()) {
+            if (!player.isAlive() || !player.isOnline()) {
+                int taskId = playerTasks.get(player);
+                executorService.shutdownNow();
+                playerTasks.remove(player);
+                System.out.println("Cancelled greeting message task for player: " + player.getName().getString() +
+                        " with task ID: " + taskId);
+            }
+        }
+    }
+
+    private String getRandomGreeting(String playerName) {
+        Random random = new Random();
+        int index = random.nextInt(100); // Generate a random number between 0 and 99
+
+        // 1% chance for "Great seeing you", 99% chance for other greetings
+        if (index == 0) {
+            return "Great seeing you, %s!";
+        }
+
+        index = random.nextInt(greetings.length - 1);
+        String greeting = greetings[index];
+
+        if (greeting.contains("%s")) {
+            greeting = greeting.replace("%s", playerName);
+        }
+
+        char[] greetingChars = greeting.toCharArray();
+        greetingChars[0] = random.nextBoolean()
+                ? Character.toLowerCase(greetingChars[0])
+                : Character.toUpperCase(greetingChars[0]);
+
+        return new String(greetingChars);
+    }
+
+    private int getRandomDelay() {
+        Random random = new Random();
+        return random.nextInt(4) + 3; // Random delay between 3 and 6 seconds
+    }
+}
